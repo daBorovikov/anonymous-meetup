@@ -39,19 +39,44 @@ jobs:
         run: |
           python3 - <<'PY'
           import base64
+          import json
           import os
+          import sys
           from pathlib import Path
 
           secret = os.environ.get('GOOGLE_SERVICES_SECRET', '')
           target = Path('app/google-services.json')
-          stripped = secret.lstrip()
+          candidate = secret.strip().lstrip('\ufeff')
 
-          if stripped.startswith('{'):
-              target.write_text(secret, encoding='utf-8')
-          else:
-              normalized = ''.join(secret.split())
-              decoded = base64.b64decode(normalized)
-              target.write_bytes(decoded)
+          if not candidate:
+              print('GOOGLE_SERVICES_JSON_BASE64 secret is empty.', file=sys.stderr)
+              sys.exit(1)
+
+          try:
+              parsed = json.loads(candidate)
+              if isinstance(parsed, dict):
+                  target.write_text(candidate, encoding='utf-8')
+                  print('google-services.json restored from raw JSON secret')
+                  raise SystemExit(0)
+          except Exception:
+              pass
+
+          normalized = ''.join(candidate.split())
+          padding = (-len(normalized)) % 4
+          normalized += '=' * padding
+
+          try:
+              decoded = base64.b64decode(normalized, validate=False)
+              decoded_text = decoded.decode('utf-8-sig')
+              parsed = json.loads(decoded_text)
+              if not isinstance(parsed, dict):
+                  raise ValueError('Decoded payload is not a JSON object')
+              target.write_text(decoded_text, encoding='utf-8')
+              print('google-services.json restored from base64 secret')
+          except Exception as exc:
+              print('GOOGLE_SERVICES_JSON_BASE64 must contain either raw google-services.json text or its base64 encoding.', file=sys.stderr)
+              print(f'Details: {exc}', file=sys.stderr)
+              sys.exit(1)
           PY
 
       - name: Make gradlew executable
