@@ -2,6 +2,8 @@
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.anonymousmeetup.data.model.LocalConversation
+import com.example.anonymousmeetup.data.model.SessionStatus
 import com.example.anonymousmeetup.data.preferences.UserPreferences
 import com.example.anonymousmeetup.data.repository.DebugToolsRepository
 import com.example.anonymousmeetup.data.repository.PrivateChatRepository
@@ -44,6 +46,9 @@ class ProfileViewModel @Inject constructor(
     private val _isDebugBusy = MutableStateFlow(false)
     val isDebugBusy: StateFlow<Boolean> = _isDebugBusy
 
+    private val _conversations = MutableStateFlow<List<PrivateConversationPreview>>(emptyList())
+    val conversations: StateFlow<List<PrivateConversationPreview>> = _conversations
+
     init {
         viewModelScope.launch {
             try {
@@ -52,6 +57,11 @@ class ProfileViewModel @Inject constructor(
                 _keyDate.value = "identity"
             } catch (e: Exception) {
                 _error.value = e.message
+            }
+        }
+        viewModelScope.launch {
+            privateChatRepository.observeConversations().collect { items ->
+                _conversations.value = items.map { it.toPreview() }
             }
         }
     }
@@ -185,5 +195,37 @@ class ProfileViewModel @Inject constructor(
     fun clearInfo() { _info.value = null }
     fun clearError() { _error.value = null }
     fun consumeBackupPayload() { _backupPayload.value = null }
-}
 
+    private fun LocalConversation.toPreview(): PrivateConversationPreview {
+        return PrivateConversationPreview(
+            conversationId = conversationId,
+            title = sanitizeDisplayText(localAlias, "Анонимный чат"),
+            status = sessionStatus,
+            subtitle = when {
+                sessionStatus == SessionStatus.PENDING && !isInitiator -> "Входящее приглашение ждёт вашего решения"
+                sessionStatus == SessionStatus.PENDING && isInitiator -> "Приглашение отправлено, ждём ответа"
+                sessionStatus == SessionStatus.ACCEPTED -> "Канал готов к переписке"
+                sessionStatus == SessionStatus.ACTIVE -> "Есть активная история сообщений"
+                sessionStatus == SessionStatus.REJECTED -> "Приглашение было отклонено"
+                else -> "Состояние: ${sessionStatus.name.lowercase()}"
+            },
+            isPendingIncoming = sessionStatus == SessionStatus.PENDING && !isInitiator
+        )
+    }
+
+    private fun sanitizeDisplayText(value: String?, fallback: String): String {
+        val trimmed = value?.trim().orEmpty()
+        if (trimmed.isBlank()) return fallback
+        if (trimmed.contains('�')) return fallback
+        if (trimmed.count { it == 'Ð' || it == 'Ñ' } >= 2) return fallback
+        return trimmed
+    }
+
+    data class PrivateConversationPreview(
+        val conversationId: String,
+        val title: String,
+        val status: SessionStatus,
+        val subtitle: String,
+        val isPendingIncoming: Boolean
+    )
+}

@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Place
@@ -67,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.anonymousmeetup.BuildConfig
+import com.example.anonymousmeetup.data.model.SessionStatus
 import com.example.anonymousmeetup.ui.components.ScreenBackground
 import com.example.anonymousmeetup.ui.viewmodels.ProfileViewModel
 import kotlinx.coroutines.launch
@@ -101,6 +103,7 @@ fun ProfileScreen(
     val info by viewModel.info.collectAsState()
     val debugTraces by viewModel.debugTraces.collectAsState(initial = emptyList())
     val isDebugBusy by viewModel.isDebugBusy.collectAsState()
+    val conversations by viewModel.conversations.collectAsState()
 
     val clipboardManager = LocalClipboardManager.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -175,6 +178,52 @@ fun ProfileScreen(
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedActionButton(text = "Экспорт", icon = Icons.Default.UploadFile, modifier = Modifier.weight(1f)) { showExportDialog = true }
                             OutlinedActionButton(text = "Импорт", icon = Icons.Default.VpnKey, modifier = Modifier.weight(1f)) { showImportDialog = true }
+                        }
+                    }
+                }
+
+                ElevatedCard(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Lock, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Анонимные беседы", style = MaterialTheme.typography.titleSmall)
+                        }
+                        if (conversations.isEmpty()) {
+                            Text(
+                                "Здесь появятся исходящие и входящие приглашения в приватные чаты. Новые invite можно принять или отклонить после открытия беседы.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                            )
+                        } else {
+                            conversations.take(8).forEach { conversation ->
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    color = if (conversation.isPendingIncoming) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                    shape = MaterialTheme.shapes.large,
+                                    onClick = { onOpenPrivateChat(conversation.conversationId) }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(conversation.title, style = MaterialTheme.typography.titleSmall)
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(conversation.subtitle, style = MaterialTheme.typography.bodySmall)
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column(horizontalAlignment = Alignment.End) {
+                                            if (conversation.isPendingIncoming) {
+                                                Text("Новый invite", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                            }
+                                            Text(statusLabel(conversation.status), style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -402,3 +451,12 @@ private fun formatDebugTime(timestamp: Long): String {
     return SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(timestamp))
 }
 
+private fun statusLabel(status: SessionStatus): String {
+    return when (status) {
+        SessionStatus.PENDING -> "pending"
+        SessionStatus.ACCEPTED -> "accepted"
+        SessionStatus.ACTIVE -> "active"
+        SessionStatus.REJECTED -> "rejected"
+        SessionStatus.FAILED -> "failed"
+    }
+}

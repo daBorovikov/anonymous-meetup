@@ -1,5 +1,16 @@
 ﻿package com.example.anonymousmeetup.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,6 +56,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.anonymousmeetup.ui.components.LongPressButton
@@ -72,6 +84,7 @@ fun ChatScreen(
     var messageText by remember { mutableStateOf("") }
     var recipientAlias by remember { mutableStateOf("") }
     var recipientPublicKey by remember { mutableStateOf("") }
+    var inviteCandidate by remember { mutableStateOf<ChatViewModel.UiMessage?>(null) }
 
     LaunchedEffect(groupId) { viewModel.loadMessages(groupId) }
     LaunchedEffect(messages.size) {
@@ -113,7 +126,15 @@ fun ChatScreen(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
                     ) {
                         items(messages, key = { it.id }) { message ->
-                            MessageItem(message)
+                            MessageItem(
+                                message = message,
+                                isSelected = inviteCandidate?.id == message.id,
+                                onClick = {
+                                    if (message.canInvite) {
+                                        inviteCandidate = if (inviteCandidate?.id == message.id) null else message
+                                    }
+                                }
+                            )
                             Spacer(modifier = Modifier.height(10.dp))
                         }
                     }
@@ -147,6 +168,63 @@ fun ChatScreen(
                             onLongPress = { showPrivateDialog = true }
                         ) {
                             Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Отправить")
+                        }
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = inviteCandidate != null,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 16.dp, vertical = 96.dp),
+                enter = fadeIn() + slideInVertically(initialOffsetY = { it / 3 }) + scaleIn(initialScale = 0.92f),
+                exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 3 }) + scaleOut(targetScale = 0.92f)
+            ) {
+                inviteCandidate?.let { candidate ->
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(24.dp),
+                        tonalElevation = 10.dp,
+                        shadowElevation = 10.dp,
+                        color = MaterialTheme.colorScheme.surface
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = "Анонимно написать ${candidate.senderAlias}?",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                text = "Внутри зашифрованного invite уйдёт только приглашение на private handshake. Получатель сможет принять или отклонить его локально.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = {
+                                        viewModel.inviteFromGroupMessage(candidate) { conversationId ->
+                                            if (conversationId != null) {
+                                                inviteCandidate = null
+                                                onOpenPrivateChat(conversationId)
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Написать")
+                                }
+                                TextButton(
+                                    onClick = { inviteCandidate = null },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Отмена")
+                                }
+                            }
                         }
                     }
                 }
@@ -205,7 +283,11 @@ fun ChatScreen(
 }
 
 @Composable
-fun MessageItem(message: ChatViewModel.UiMessage) {
+fun MessageItem(
+    message: ChatViewModel.UiMessage,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
     val dateFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val alignment = if (message.isMine) Alignment.End else Alignment.Start
     val bubbleShape: Shape = if (message.isMine) {
@@ -214,6 +296,8 @@ fun MessageItem(message: ChatViewModel.UiMessage) {
         RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp)
     }
     val bubbleColor = if (message.isMine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+    val scale by animateFloatAsState(targetValue = if (isSelected) 1.03f else 1f, label = "messageScale")
+    val borderWidth by animateDpAsState(targetValue = if (isSelected) 2.dp else 0.dp, label = "messageBorder")
 
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = alignment) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -221,8 +305,25 @@ fun MessageItem(message: ChatViewModel.UiMessage) {
             Text(dateFormat.format(Date(message.timestamp)), style = MaterialTheme.typography.labelSmall)
         }
         Spacer(modifier = Modifier.height(4.dp))
-        Surface(color = bubbleColor, shape = bubbleShape) {
-            Text(message.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+        Surface(
+            color = bubbleColor,
+            shape = bubbleShape,
+            border = if (borderWidth > 0.dp) BorderStroke(borderWidth, MaterialTheme.colorScheme.primary) else null,
+            modifier = Modifier
+                .graphicsLayer(scaleX = scale, scaleY = scale)
+                .clickable(enabled = message.canInvite, onClick = onClick)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Text(message.text, style = MaterialTheme.typography.bodyMedium)
+                if (message.canInvite) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = if (isSelected) "Нажмите «Написать», чтобы отправить invite" else "Нажмите, чтобы перейти в приватный чат",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
         }
     }
 }

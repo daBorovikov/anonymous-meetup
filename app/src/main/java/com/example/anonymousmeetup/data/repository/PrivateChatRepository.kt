@@ -1,4 +1,4 @@
-package com.example.anonymousmeetup.data.repository
+﻿package com.example.anonymousmeetup.data.repository
 
 import com.example.anonymousmeetup.data.debug.DebugTraceLogger
 import com.example.anonymousmeetup.data.local.ConversationSecretStore
@@ -61,6 +61,17 @@ class PrivateChatRepository @Inject constructor(
     suspend fun startPrivateChat(peerPublicKey: String, localAlias: String?): Result<String> {
         ensureListenersStarted()
         return runCatching {
+            val now = System.currentTimeMillis()
+            val existing = localConversationStore.getConversationByPeerKey(peerPublicKey)
+            if (existing != null && existing.sessionStatus != SessionStatus.FAILED && existing.sessionStatus != SessionStatus.REJECTED) {
+                val mergedAlias = localAlias?.ifBlank { null } ?: existing.localAlias
+                if (mergedAlias != existing.localAlias) {
+                    localConversationStore.upsertConversation(existing.copy(localAlias = mergedAlias, updatedAt = now))
+                }
+                debugTraceLogger.debug(TAG, "startPrivateChat reused conversationId=${existing.conversationId}")
+                return@runCatching existing.conversationId
+            }
+
             val identity = userRepository.ensureIdentityKeys()
             val peerPublic = encryptionService.importPublicKey(peerPublicKey)
             val myPrivate = encryptionService.importPrivateKey(identity.privateKey)
@@ -81,8 +92,8 @@ class PrivateChatRepository @Inject constructor(
                     sharedSecretRef = secretRef,
                     poolId = conversationPoolId,
                     conversationSeed = conversationSeed,
-                    createdAt = System.currentTimeMillis(),
-                    updatedAt = System.currentTimeMillis(),
+                    createdAt = now,
+                    updatedAt = now,
                     isInitiator = true
                 )
             )
@@ -93,7 +104,7 @@ class PrivateChatRepository @Inject constructor(
                 .put("conversationSeed", conversationSeed)
                 .put("initiatorPublicKey", identity.publicKey)
                 .put("initiatorAlias", userPreferences.getNickname().orEmpty().ifBlank { null })
-                .put("createdAt", System.currentTimeMillis())
+                .put("createdAt", now)
 
             val requestPoolId = AnonymousPools.inboundPrivatePoolFor(peerPublicKey)
             val envelope = anonymousMessageCodec.createAsymmetricEnvelope(
@@ -106,20 +117,95 @@ class PrivateChatRepository @Inject constructor(
             appendSystemMessage(
                 targetId = conversationId,
                 direction = MessageDirection.OUTGOING,
-                text = "Handshake request sent",
+                text = "Приглашение в анонимный чат отправлено",
                 sourceEnvelopeId = null
             )
             conversationId
         }
     }
 
+    suspend fun acceptConversationInvite(conversationId: String) {
+        ensureListenersStarted()
+        val conversation = localConversationStore.getConversation(conversationId)
+            ?: throw IllegalStateException("Приватная беседа не найдена")
+        require(!conversation.isInitiator) { "Нельзя принять своё собственное приглашение" }
+        require(conversation.sessionStatus == SessionStatus.PENDING) { "Приглашение уже обработано" }
+
+        val identity = userRepository.ensureIdentityKeys()
+        val now = System.currentTimeMillis()
+        localConversationStore.updateStatus(
+            conversationId = conversationId,
+            status = SessionStatus.ACCEPTED,
+            updatedAt = now,
+            acceptedAt = now
+        )
+        appendSystemMessage(
+            targetId = conversationId,
+            direction = MessageDirection.OUTGOING,
+            text = "Вы приняли приглашение в анонимный чат",
+            sourceEnvelopeId = null
+        )
+
+        val acceptPayload = JSONObject()
+            .put("type", "HANDSHAKE_ACCEPT")
+            .put("protocolVersion", AnonymousMessageCodec.PROTOCOL_VERSION)
+            .put("conversationSeed", conversation.conversationSeed)
+            .put("responderPublicKey", identity.publicKey)
+            .put("acceptedAt", now)
+
+        val responseEnvelope = anonymousMessageCodec.createAsymmetricEnvelope(
+            poolId = AnonymousPools.inboundPrivatePoolFor(conversation.peerPublicKey),
+            recipientPublicKey = conversation.peerPublicKey,
+            payloadJson = acceptPayload
+        )
+        debugTraceLogger.debug(TAG, "acceptConversationInvite conversationId=$conversationId")
+        firebaseService.sendAnonymousEnvelope(responseEnvelope)
+    }
+
+    suspend fun rejectConversationInvite(conversationId: String) {
+        ensureListenersStarted()
+        val conversation = localConversationStore.getConversation(conversationId)
+            ?: throw IllegalStateException("Приватная беседа не найдена")
+        require(!conversation.isInitiator) { "Нельзя отклонить своё собственное приглашение" }
+        require(conversation.sessionStatus == SessionStatus.PENDING) { "Приглашение уже обработано" }
+
+        val identity = userRepository.ensureIdentityKeys()
+        val now = System.currentTimeMillis()
+        localConversationStore.updateStatus(
+            conversationId = conversationId,
+            status = SessionStatus.REJECTED,
+            updatedAt = now
+        )
+        appendSystemMessage(
+            targetId = conversationId,
+            direction = MessageDirection.OUTGOING,
+            text = "Вы отклонили приглашение в анонимный чат",
+            sourceEnvelopeId = null
+        )
+
+        val rejectPayload = JSONObject()
+            .put("type", "HANDSHAKE_REJECT")
+            .put("protocolVersion", AnonymousMessageCodec.PROTOCOL_VERSION)
+            .put("conversationSeed", conversation.conversationSeed)
+            .put("responderPublicKey", identity.publicKey)
+            .put("rejectedAt", now)
+
+        val responseEnvelope = anonymousMessageCodec.createAsymmetricEnvelope(
+            poolId = AnonymousPools.inboundPrivatePoolFor(conversation.peerPublicKey),
+            recipientPublicKey = conversation.peerPublicKey,
+            payloadJson = rejectPayload
+        )
+        debugTraceLogger.debug(TAG, "rejectConversationInvite conversationId=$conversationId")
+        firebaseService.sendAnonymousEnvelope(responseEnvelope)
+    }
+
     suspend fun sendPrivateText(conversationId: String, text: String) {
         ensureListenersStarted()
         val conversation = localConversationStore.getConversation(conversationId)
-            ?: throw IllegalStateException("��������� ������ �� �������")
-        require(conversation.sessionStatus != SessionStatus.PENDING) { "Handshake ��� �� ����������" }
+            ?: throw IllegalStateException("Приватная беседа не найдена")
+        require(conversation.canSendEncryptedMessages()) { "Приглашение ещё не принято" }
         val keyMaterial = conversationSecretStore.getSecret(conversation.sharedSecretRef)
-            ?: throw IllegalStateException("������ ������ �� ������")
+            ?: throw IllegalStateException("Секрет беседы не найден")
         val sentAt = System.currentTimeMillis()
         val payload = JSONObject()
             .put("type", "PRIVATE_TEXT")
@@ -153,6 +239,7 @@ class PrivateChatRepository @Inject constructor(
             conversationId = conversationId,
             status = SessionStatus.ACTIVE,
             updatedAt = sentAt,
+            acceptedAt = conversation.acceptedAt ?: sentAt,
             lastMessageAt = sentAt
         )
     }
@@ -160,10 +247,10 @@ class PrivateChatRepository @Inject constructor(
     suspend fun sendLocation(conversationId: String, locationPayload: LocationPayload) {
         ensureListenersStarted()
         val conversation = localConversationStore.getConversation(conversationId)
-            ?: throw IllegalStateException("��������� ������ �� �������")
-        require(conversation.sessionStatus != SessionStatus.PENDING) { "Handshake ��� �� ����������" }
+            ?: throw IllegalStateException("Приватная беседа не найдена")
+        require(conversation.canSendEncryptedMessages()) { "Приглашение ещё не принято" }
         val keyMaterial = conversationSecretStore.getSecret(conversation.sharedSecretRef)
-            ?: throw IllegalStateException("������ ������ �� ������")
+            ?: throw IllegalStateException("Секрет беседы не найден")
         val payload = JSONObject()
             .put("type", "LOCATION")
             .put("protocolVersion", AnonymousMessageCodec.PROTOCOL_VERSION)
@@ -197,6 +284,7 @@ class PrivateChatRepository @Inject constructor(
             conversationId = conversationId,
             status = SessionStatus.ACTIVE,
             updatedAt = locationPayload.sentAt,
+            acceptedAt = conversation.acceptedAt ?: locationPayload.sentAt,
             lastMessageAt = locationPayload.sentAt
         )
     }
@@ -265,7 +353,7 @@ class PrivateChatRepository @Inject constructor(
         return when (json.optString("type")) {
             "HANDSHAKE_REQUEST" -> {
                 debugTraceLogger.debug(TAG, "handleHandshakeEnvelope request id=${envelope.id}")
-                acceptHandshake(json, envelope.id)
+                stageIncomingHandshake(json, envelope.id)
                 true
             }
             "HANDSHAKE_ACCEPT" -> {
@@ -273,11 +361,16 @@ class PrivateChatRepository @Inject constructor(
                 applyHandshakeAccept(json, envelope.id)
                 true
             }
+            "HANDSHAKE_REJECT" -> {
+                debugTraceLogger.debug(TAG, "handleHandshakeEnvelope reject id=${envelope.id}")
+                applyHandshakeReject(json, envelope.id)
+                true
+            }
             else -> false
         }
     }
 
-    private suspend fun acceptHandshake(json: JSONObject, envelopeId: String) {
+    private suspend fun stageIncomingHandshake(json: JSONObject, envelopeId: String) {
         val conversationSeed = json.optString("conversationSeed")
         val initiatorPublicKey = json.optString("initiatorPublicKey")
         if (conversationSeed.isBlank() || initiatorPublicKey.isBlank()) return
@@ -294,42 +387,43 @@ class PrivateChatRepository @Inject constructor(
         conversationSecretStore.saveSecret(secretRef, keyMaterial)
 
         val existing = localConversationStore.getConversation(conversationId)
+        if (existing != null && existing.sessionStatus == SessionStatus.ACTIVE) {
+            return
+        }
+
         val now = System.currentTimeMillis()
+        val createdAt = json.optLong("createdAt", now)
+        val aliasFromCiphertext = json.optString("initiatorAlias").ifBlank { null }
+        val nextStatus = when (existing?.sessionStatus) {
+            SessionStatus.ACCEPTED, SessionStatus.ACTIVE -> existing.sessionStatus
+            else -> SessionStatus.PENDING
+        }
+
         localConversationStore.upsertConversation(
             LocalConversation(
                 conversationId = conversationId,
                 peerPublicKey = initiatorPublicKey,
-                localAlias = existing?.localAlias ?: json.optString("initiatorAlias").ifBlank { null },
-                sessionStatus = SessionStatus.ACCEPTED,
+                localAlias = existing?.localAlias ?: aliasFromCiphertext,
+                sessionStatus = nextStatus,
                 sharedSecretRef = secretRef,
                 poolId = conversationPoolId,
                 conversationSeed = conversationSeed,
-                createdAt = existing?.createdAt ?: now,
+                createdAt = existing?.createdAt ?: createdAt,
                 updatedAt = now,
-                acceptedAt = now,
+                acceptedAt = existing?.acceptedAt,
+                lastMessageAt = existing?.lastMessageAt,
                 isInitiator = false
             )
         )
-        appendSystemMessage(
-            targetId = conversationId,
-            direction = MessageDirection.INCOMING,
-            text = "Handshake request accepted",
-            sourceEnvelopeId = envelopeId
-        )
 
-        val acceptPayload = JSONObject()
-            .put("type", "HANDSHAKE_ACCEPT")
-            .put("protocolVersion", AnonymousMessageCodec.PROTOCOL_VERSION)
-            .put("conversationSeed", conversationSeed)
-            .put("responderPublicKey", identity.publicKey)
-            .put("acceptedAt", now)
-
-        val responseEnvelope = anonymousMessageCodec.createAsymmetricEnvelope(
-            poolId = AnonymousPools.inboundPrivatePoolFor(initiatorPublicKey),
-            recipientPublicKey = initiatorPublicKey,
-            payloadJson = acceptPayload
-        )
-        firebaseService.sendAnonymousEnvelope(responseEnvelope)
+        if (existing == null || existing.sessionStatus == SessionStatus.REJECTED || existing.sessionStatus == SessionStatus.FAILED) {
+            appendSystemMessage(
+                targetId = conversationId,
+                direction = MessageDirection.INCOMING,
+                text = "Вам пришло приглашение в анонимный чат",
+                sourceEnvelopeId = envelopeId
+            )
+        }
     }
 
     private suspend fun applyHandshakeAccept(json: JSONObject, envelopeId: String) {
@@ -368,14 +462,39 @@ class PrivateChatRepository @Inject constructor(
         appendSystemMessage(
             targetId = conversationId,
             direction = MessageDirection.INCOMING,
-            text = "Handshake accepted",
+            text = "Собеседник принял приглашение",
+            sourceEnvelopeId = envelopeId
+        )
+    }
+
+    private suspend fun applyHandshakeReject(json: JSONObject, envelopeId: String) {
+        val conversationSeed = json.optString("conversationSeed")
+        val responderPublicKey = json.optString("responderPublicKey")
+        if (conversationSeed.isBlank() || responderPublicKey.isBlank()) return
+
+        val conversationId = anonymousMessageCodec.buildConversationId(conversationSeed)
+        val existing = localConversationStore.getConversation(conversationId) ?: return
+        if (existing.sessionStatus != SessionStatus.PENDING) return
+
+        val now = json.optLong("rejectedAt", System.currentTimeMillis())
+        localConversationStore.upsertConversation(
+            existing.copy(
+                peerPublicKey = responderPublicKey,
+                sessionStatus = SessionStatus.REJECTED,
+                updatedAt = now
+            )
+        )
+        appendSystemMessage(
+            targetId = conversationId,
+            direction = MessageDirection.INCOMING,
+            text = "Собеседник отклонил приглашение",
             sourceEnvelopeId = envelopeId
         )
     }
 
     private suspend fun handleConversationEnvelope(envelope: com.example.anonymousmeetup.data.model.AnonymousEnvelope): Boolean {
         val candidates = localConversationStore.getConversationsForPool(envelope.poolId)
-            .filter { it.sessionStatus != SessionStatus.FAILED }
+            .filter { it.sessionStatus != SessionStatus.FAILED && it.sessionStatus != SessionStatus.REJECTED }
         if (candidates.isEmpty()) return false
 
         for (conversation in candidates) {
@@ -387,6 +506,7 @@ class PrivateChatRepository @Inject constructor(
 
             when (json.optString("type")) {
                 "PRIVATE_TEXT" -> {
+                    val sentAt = json.optLong("sentAt", envelope.timestamp)
                     localMessageStore.appendMessage(
                         LocalMessageRecord(
                             localMessageId = anonymousMessageCodec.newLocalMessageId(),
@@ -395,7 +515,7 @@ class PrivateChatRepository @Inject constructor(
                             type = LocalMessageType.PRIVATE_TEXT,
                             text = json.optString("text"),
                             rawPayloadJson = json.toString(),
-                            timestamp = json.optLong("sentAt", envelope.timestamp),
+                            timestamp = sentAt,
                             sourceEnvelopeId = envelope.id,
                             isRead = false
                         )
@@ -403,13 +523,15 @@ class PrivateChatRepository @Inject constructor(
                     localConversationStore.updateStatus(
                         conversationId = conversation.conversationId,
                         status = SessionStatus.ACTIVE,
-                        updatedAt = json.optLong("sentAt", envelope.timestamp),
-                        lastMessageAt = json.optLong("sentAt", envelope.timestamp)
+                        updatedAt = sentAt,
+                        acceptedAt = conversation.acceptedAt ?: sentAt,
+                        lastMessageAt = sentAt
                     )
                     return true
                 }
                 "LOCATION" -> {
-                    val text = "${json.optDouble("latitude")}, ${json.optDouble("longitude")}" 
+                    val sentAt = json.optLong("sentAt", envelope.timestamp)
+                    val text = "${json.optDouble("latitude")}, ${json.optDouble("longitude") }"
                     localMessageStore.appendMessage(
                         LocalMessageRecord(
                             localMessageId = anonymousMessageCodec.newLocalMessageId(),
@@ -418,7 +540,7 @@ class PrivateChatRepository @Inject constructor(
                             type = LocalMessageType.LOCATION,
                             text = text,
                             rawPayloadJson = json.toString(),
-                            timestamp = json.optLong("sentAt", envelope.timestamp),
+                            timestamp = sentAt,
                             sourceEnvelopeId = envelope.id,
                             isRead = false
                         )
@@ -426,8 +548,9 @@ class PrivateChatRepository @Inject constructor(
                     localConversationStore.updateStatus(
                         conversationId = conversation.conversationId,
                         status = SessionStatus.ACTIVE,
-                        updatedAt = json.optLong("sentAt", envelope.timestamp),
-                        lastMessageAt = json.optLong("sentAt", envelope.timestamp)
+                        updatedAt = sentAt,
+                        acceptedAt = conversation.acceptedAt ?: sentAt,
+                        lastMessageAt = sentAt
                     )
                     return true
                 }
@@ -455,6 +578,10 @@ class PrivateChatRepository @Inject constructor(
                 isRead = direction == MessageDirection.OUTGOING
             )
         )
+    }
+
+    private fun LocalConversation.canSendEncryptedMessages(): Boolean {
+        return sessionStatus == SessionStatus.ACCEPTED || sessionStatus == SessionStatus.ACTIVE
     }
 
     private companion object {

@@ -68,6 +68,24 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    fun inviteFromGroupMessage(message: UiMessage, onResult: (String?) -> Unit) {
+        if (message.isMine) {
+            _error.value = "Нельзя пригласить самого себя"
+            onResult(null)
+            return
+        }
+        if (message.senderPublicKey.isNullOrBlank()) {
+            _error.value = "У сообщения нет контактного ключа для handshake"
+            onResult(null)
+            return
+        }
+        startPrivateChat(
+            targetAlias = message.senderAlias,
+            targetPublicKey = message.senderPublicKey,
+            onResult = onResult
+        )
+    }
+
     fun clearError() {
         _error.value = null
     }
@@ -78,18 +96,22 @@ class ChatViewModel @Inject constructor(
 
     private fun LocalMessageRecord.toUiMessage(): UiMessage {
         val rawJson = rawPayloadJson?.let { runCatching { JSONObject(it) }.getOrNull() }
+        val isOutgoing = direction.name == "OUTGOING"
         val alias = rawJson?.optString("senderAlias").orEmpty().ifBlank {
-            if (direction.name == "OUTGOING") "Вы" else "Участник"
+            if (isOutgoing) "Вы" else "Участник"
         }
+        val senderPublicKey = rawJson?.optString("senderPublicKey").orEmpty().ifBlank { null }
         return UiMessage(
             id = localMessageId,
             senderAlias = sanitizeDisplayText(
                 value = alias,
-                fallback = if (direction.name == "OUTGOING") "Вы" else "Участник"
+                fallback = if (isOutgoing) "Вы" else "Участник"
             ),
+            senderPublicKey = senderPublicKey,
             text = text ?: "",
             timestamp = timestamp,
-            isMine = direction.name == "OUTGOING"
+            isMine = isOutgoing,
+            canInvite = !isOutgoing && !senderPublicKey.isNullOrBlank() && type.name == "GROUP_TEXT"
         )
     }
 
@@ -104,8 +126,10 @@ class ChatViewModel @Inject constructor(
     data class UiMessage(
         val id: String,
         val senderAlias: String,
+        val senderPublicKey: String?,
         val text: String,
         val timestamp: Long,
-        val isMine: Boolean
+        val isMine: Boolean,
+        val canInvite: Boolean
     )
 }

@@ -18,12 +18,16 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.anonymousmeetup.data.repository.PrivateChatRepository
 import com.example.anonymousmeetup.ui.screens.ChatScreen
 import com.example.anonymousmeetup.ui.screens.CreateGroupScreen
 import com.example.anonymousmeetup.ui.screens.EncountersScreen
@@ -38,11 +42,24 @@ import com.example.anonymousmeetup.ui.screens.RegisterScreen
 import com.example.anonymousmeetup.ui.screens.SearchGroupsScreen
 import com.example.anonymousmeetup.ui.theme.AnonymousMeetupTheme
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    @Inject
+    lateinit var privateChatRepository: PrivateChatRepository
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                privateChatRepository.observeConversations().collect { }
+            }
+        }
+
         setContent {
             AnonymousMeetupTheme {
                 Surface(
@@ -205,4 +222,3 @@ private data class BottomNavItem(
     val label: String,
     val icon: androidx.compose.ui.graphics.vector.ImageVector
 )
-

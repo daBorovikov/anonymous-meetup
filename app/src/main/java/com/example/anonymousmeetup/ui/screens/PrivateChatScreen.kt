@@ -1,6 +1,7 @@
 ﻿package com.example.anonymousmeetup.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -43,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.anonymousmeetup.data.model.PrivateMessageUiModel
 import com.example.anonymousmeetup.data.model.SessionStatus
 import com.example.anonymousmeetup.ui.components.ScreenBackground
 import com.example.anonymousmeetup.ui.viewmodels.PrivateChatViewModel
@@ -75,7 +77,8 @@ fun PrivateChatScreen(
         }
     }
 
-    val canSend = session?.sessionStatus != SessionStatus.PENDING
+    val canSend = viewModel.canSend()
+    val isIncomingPendingInvite = viewModel.isIncomingPendingInvite()
 
     Scaffold(
         topBar = {
@@ -96,8 +99,40 @@ fun PrivateChatScreen(
     ) { paddingValues ->
         ScreenBackground(modifier = Modifier.padding(paddingValues)) {
             Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-                StatusBanner(status = session?.sessionStatus)
+                StatusBanner(status = session?.sessionStatus, isInitiator = session?.isInitiator ?: false)
                 Spacer(modifier = Modifier.height(8.dp))
+
+                if (isIncomingPendingInvite) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = MaterialTheme.shapes.large
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "Принять приглашение в анонимную переписку?",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Text(
+                                text = "После принятия вы сможете обмениваться сообщениями внутри шифрованного канала. До принятия сервер видит только encrypted container.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { viewModel.acceptInvite() }, modifier = Modifier.weight(1f)) {
+                                    Text("Принять")
+                                }
+                                OutlinedButton(onClick = { viewModel.rejectInvite() }, modifier = Modifier.weight(1f)) {
+                                    Text("Отклонить")
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
 
                 if (showDebug && session != null) {
                     Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
@@ -142,7 +177,7 @@ fun PrivateChatScreen(
                         value = text,
                         onValueChange = { text = it },
                         modifier = Modifier.weight(1f),
-                        placeholder = { Text(if (canSend) "Сообщение" else "Ожидание handshake") },
+                        placeholder = { Text(if (canSend) "Сообщение" else "Сначала дождитесь принятия invite") },
                         enabled = canSend
                     )
                     Spacer(modifier = Modifier.width(8.dp))
@@ -173,11 +208,16 @@ fun PrivateChatScreen(
 }
 
 @Composable
-private fun StatusBanner(status: SessionStatus?) {
+private fun StatusBanner(status: SessionStatus?, isInitiator: Boolean) {
     val text = when (status) {
-        SessionStatus.PENDING -> "Ожидание подтверждения handshake"
-        SessionStatus.ACCEPTED -> "Handshake подтверждён. Канал готов к обмену сообщениями"
+        SessionStatus.PENDING -> if (isInitiator) {
+            "Приглашение отправлено. Ожидаем решения собеседника"
+        } else {
+            "Входящее приглашение ожидает вашего решения"
+        }
+        SessionStatus.ACCEPTED -> "Приглашение принято. Канал готов к обмену сообщениями"
         SessionStatus.ACTIVE -> "Сессия активна"
+        SessionStatus.REJECTED -> "Приглашение отклонено"
         SessionStatus.FAILED -> "Сессия помечена как failed"
         null -> "Загрузка локальной беседы"
     }
@@ -187,7 +227,23 @@ private fun StatusBanner(status: SessionStatus?) {
 }
 
 @Composable
-private fun PrivateMessageItem(message: com.example.anonymousmeetup.data.model.PrivateMessageUiModel) {
+private fun PrivateMessageItem(message: PrivateMessageUiModel) {
+    if (message.type == "SYSTEM") {
+        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.large
+            ) {
+                Text(
+                    text = message.text,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                )
+            }
+        }
+        return
+    }
+
     val dateFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val alignment = if (message.isMine) Alignment.End else Alignment.Start
     val color = if (message.isMine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.anonymousmeetup.data.model.LocalConversation
 import com.example.anonymousmeetup.data.model.LocationPayload
 import com.example.anonymousmeetup.data.model.PrivateMessageUiModel
+import com.example.anonymousmeetup.data.model.SessionStatus
 import com.example.anonymousmeetup.data.repository.PrivateChatRepository
 import com.example.anonymousmeetup.services.MapService
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -65,6 +66,32 @@ class PrivateChatViewModel @Inject constructor(
         }
     }
 
+    fun acceptInvite() {
+        val conversationId = _session.value?.conversationId ?: return
+        viewModelScope.launch {
+            runCatching {
+                privateChatRepository.acceptConversationInvite(conversationId)
+            }.onSuccess {
+                _info.value = "Приглашение принято"
+            }.onFailure {
+                _error.value = "Не удалось принять приглашение: ${it.message}"
+            }
+        }
+    }
+
+    fun rejectInvite() {
+        val conversationId = _session.value?.conversationId ?: return
+        viewModelScope.launch {
+            runCatching {
+                privateChatRepository.rejectConversationInvite(conversationId)
+            }.onSuccess {
+                _info.value = "Приглашение отклонено"
+            }.onFailure {
+                _error.value = "Не удалось отклонить приглашение: ${it.message}"
+            }
+        }
+    }
+
     fun sendText(text: String) {
         val conversationId = _session.value?.conversationId ?: return
         viewModelScope.launch {
@@ -92,6 +119,18 @@ class PrivateChatViewModel @Inject constructor(
                 _error.value = "Failed to send location: ${it.message}"
             }
         }
+    }
+
+    fun canSend(): Boolean {
+        return when (_session.value?.sessionStatus) {
+            SessionStatus.ACCEPTED, SessionStatus.ACTIVE -> true
+            else -> false
+        }
+    }
+
+    fun isIncomingPendingInvite(): Boolean {
+        val session = _session.value ?: return false
+        return session.sessionStatus == SessionStatus.PENDING && !session.isInitiator
     }
 
     fun clearInfo() {

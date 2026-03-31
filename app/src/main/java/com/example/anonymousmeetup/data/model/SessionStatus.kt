@@ -4,5 +4,6 @@ enum class SessionStatus {
     PENDING,
     ACCEPTED,
     ACTIVE,
+    REJECTED,
     FAILED
 }
