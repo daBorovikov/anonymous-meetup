@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Anonymous Meetup</string>
+    <string name="welcome">Добро пожаловать в Anonymous Meetup!</string>
+    <string name="enter_nickname">Введите ваш никнейм</string>
+    <string name="continue_text">Продолжить</string>
+    <string name="location_permission_required">Требуется разрешение на доступ к местоположению</string>
+    <string name="location_service_running">Служба местоположения активна</string>
+    <string name="chat_title">Чат</string>
+    <string name="message_hint">Введите сообщение</string>
+    <string name="send_message">Отправить</string>
+    <string name="create_group">Создать группу</string>
+    <string name="join_group">Присоединиться к группе</string>
+    <string name="group_name">Название группы</string>
+    <string name="group_description">Описание группы</string>
+    <string name="create">Создать</string>
+    <string name="cancel">Отмена</string>
+    <string name="error_loading_messages">Ошибка загрузки сообщений</string>
+    <string name="error_sending_message">Ошибка отправки сообщения</string>
+    <string name="error_creating_group">Ошибка при создании группы</string>
+    <string name="error_joining_group">Ошибка при присоединении к группе</string>
+</resources>

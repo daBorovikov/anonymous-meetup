@@ -1,0 +1,13 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "anonymous_envelopes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "poolId", "order": "ASCENDING" },
+        { "fieldPath": "timestamp", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

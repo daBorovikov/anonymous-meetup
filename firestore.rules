@@ -1,0 +1,78 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isNumber(value) {
+      return value is int || value is float;
+    }
+
+    function isValidPoolId(poolId) {
+      return poolId in [
+        "private_pool_01",
+        "private_pool_02",
+        "private_pool_03",
+        "private_pool_04",
+        "group_pool_01",
+        "group_pool_02",
+        "group_pool_03",
+        "group_pool_04"
+      ];
+    }
+
+    function isGroupDocument(data) {
+      return data.keys().hasOnly([
+        "id",
+        "name",
+        "description",
+        "category",
+        "isPrivate",
+        "groupHash",
+        "poolId",
+        "joinToken",
+        "createdAt"
+      ]) &&
+      data.name is string &&
+      data.description is string &&
+      data.category is string &&
+      data.isPrivate is bool &&
+      (!("groupHash" in data) || data.groupHash is string) &&
+      data.poolId is string &&
+      isValidPoolId(data.poolId) &&
+      (!("joinToken" in data) || data.joinToken is string || data.joinToken == null) &&
+      isNumber(data.createdAt);
+    }
+
+    function isAnonymousEnvelope(data) {
+      return data.keys().hasOnly([
+        "poolId",
+        "ciphertext",
+        "nonce",
+        "timestamp",
+        "ttlSeconds",
+        "version"
+      ]) &&
+      data.poolId is string &&
+      isValidPoolId(data.poolId) &&
+      data.ciphertext is string &&
+      data.ciphertext.size() > 0 &&
+      data.nonce is string &&
+      data.nonce.size() > 0 &&
+      isNumber(data.timestamp) &&
+      data.ttlSeconds is int &&
+      data.ttlSeconds > 0 &&
+      data.version is int &&
+      data.version >= 1;
+    }
+
+    match /groups/{groupId} {
+      allow read: if true;
+      allow create, update: if isGroupDocument(request.resource.data);
+      allow delete: if false;
+    }
+
+    match /anonymous_envelopes/{envelopeId} {
+      allow read: if true;
+      allow create: if isAnonymousEnvelope(request.resource.data);
+      allow update, delete: if false;
+    }
+  }
+}
