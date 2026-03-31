@@ -34,7 +34,25 @@ jobs:
 
       - name: Restore google-services.json
         if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
-        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+        env:
+          GOOGLE_SERVICES_SECRET: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          secret = os.environ.get('GOOGLE_SERVICES_SECRET', '')
+          target = Path('app/google-services.json')
+          stripped = secret.lstrip()
+
+          if stripped.startswith('{'):
+              target.write_text(secret, encoding='utf-8')
+          else:
+              normalized = ''.join(secret.split())
+              decoded = base64.b64decode(normalized)
+              target.write_bytes(decoded)
+          PY
 
       - name: Make gradlew executable
         run: chmod +x gradlew
