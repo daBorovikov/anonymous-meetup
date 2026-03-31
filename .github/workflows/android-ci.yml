@@ -57,28 +57,47 @@ jobs:
     name: Deploy Firestore Rules And Indexes
     needs: build
     runs-on: ubuntu-latest
-    env:
-      FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
-    if: ${{ (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main') && env.FIREBASE_SERVICE_ACCOUNT_JSON != '' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check Firebase service account secret
+        id: check-secret
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -n "$FIREBASE_SERVICE_ACCOUNT_JSON" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip deploy because secret is missing
+        if: ${{ steps.check-secret.outputs.configured != 'true' }}
+        run: echo "FIREBASE_SERVICE_ACCOUNT_JSON is not configured. Skipping Firestore deploy."
+
       - name: Set up Node.js
+        if: ${{ steps.check-secret.outputs.configured == 'true' }}
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Install Firebase CLI
+        if: ${{ steps.check-secret.outputs.configured == 'true' }}
         run: npm install -g firebase-tools
 
       - name: Restore Firebase service account
+        if: ${{ steps.check-secret.outputs.configured == 'true' }}
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
         run: |
           cat > "$RUNNER_TEMP/firebase-service-account.json" <<'JSON'
-          ${{ env.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
           JSON
           echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/firebase-service-account.json" >> "$GITHUB_ENV"
 
       - name: Deploy Firestore
+        if: ${{ steps.check-secret.outputs.configured == 'true' }}
         run: firebase deploy --only firestore --project anonymousmeetup-b5fb8 --non-interactive
